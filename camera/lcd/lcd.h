@@ -12,6 +12,7 @@ typedef struct {
     int fd;
     void* base_addr;
     uint32_t len;
+    uint32_t phy_addr;
     uint16_t xres;
     uint16_t yres; 
     uint8_t bbp;

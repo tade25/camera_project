@@ -70,16 +70,6 @@ int camera_init(V4l2_DevType* dev, const char* file_name)
         goto err_close;
     }
 
-    printf("camera fmt: %c%c%c%c, w=%u, h=%u, bpl=%u, size=%u\n",
-            fmt.fmt.pix.pixelformat & 0xff,
-            (fmt.fmt.pix.pixelformat >> 8) & 0xff,
-            (fmt.fmt.pix.pixelformat >> 16) & 0xff,
-            (fmt.fmt.pix.pixelformat >> 24) & 0xff,
-            fmt.fmt.pix.width,
-            fmt.fmt.pix.height,
-            fmt.fmt.pix.bytesperline,
-            fmt.fmt.pix.sizeimage);
-
     if((CAMERA_WIDTH == fmt.fmt.pix.width) &&\
         (CAMERA_HEIHET == fmt.fmt.pix.height) &&\
         (V4L2_PIX_FMT_YUYV == fmt.fmt.pix.pixelformat)) {
@@ -123,6 +113,19 @@ int camera_init(V4l2_DevType* dev, const char* file_name)
         }
     }
 
+    // 获取物理地址
+    for(i = 0;i < req.count;i++) {
+        memset(&buf, 0, sizeof(buf));
+        buf.index = i;
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+        if(ioctl(dev->fd, VIDIOC_QUERYBUF, &buf) < 0) {
+            printf("query buffer failed\n");
+            goto err_munmap;
+        }
+        dev->buffers[i].phy_addr = buf.m.offset;
+    }
+
     memset(&buf_type, 0, sizeof(buf_type));
     buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if(ioctl(dev->fd, VIDIOC_STREAMON, &buf_type) < 0) {
@@ -145,15 +148,19 @@ err_open:
     return -1;
 }
 
-void camera_capture(V4l2_DevType* dev, void* fb_base_addr, uint16_t lcd_xres)
+extern int pxp_yuyv_to_rgb565(void* dev, uint32_t cam_buf, uint32_t fb_buf, int cam_w, int cam_h);
+void camera_capture(V4l2_DevType* dev, uint32_t fb_buf, void* pxp_dev)
 {
     struct timespec t_start;
     struct v4l2_buffer buf;
     unsigned int frame_cnt = 0;
     double fps;
+    FILE *raw_fp;
+    char filename[128];
 
     clock_gettime(CLOCK_MONOTONIC, &t_start);
     while(dev->is_running) {
+    // for(frame_cnt = 0;frame_cnt < 200;frame_cnt++) {
         memset(&buf, 0, sizeof(buf));
         buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         buf.memory = V4L2_MEMORY_MMAP;
@@ -162,8 +169,16 @@ void camera_capture(V4l2_DevType* dev, void* fb_base_addr, uint16_t lcd_xres)
             break;
         }
 
-        if(dev->lcd_cbk)
-            dev->lcd_cbk(fb_base_addr, lcd_xres, dev->buffers[buf.index].start, 640, 480);
+        // snprintf(filename, sizeof(filename), "/frame_%04u.yuyv", frame_cnt);
+        // raw_fp = fopen(filename, "wb");
+        // if (raw_fp) {
+        //     fwrite(dev->buffers[buf.index].start, 1, buf.bytesused, raw_fp);
+        //     fclose(raw_fp);
+        //     printf("保存第 %d 帧：%s\n", frame_cnt, filename);
+        // } else {
+        //     perror("fopen failed");
+        // }
+        pxp_yuyv_to_rgb565(pxp_dev, dev->buffers[buf.index].phy_addr, fb_buf, 640, 480);
 
         if(ioctl(dev->fd, VIDIOC_QBUF, &buf) < 0) {
             perror("qbuf failed\n");

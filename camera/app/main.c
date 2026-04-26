@@ -14,8 +14,10 @@ int main(int argc, char** argv)
 {
     V4l2_DevType cam;
     Fb_DevType fb;
+    Pxp_DevType pxp;
     const char* video_dev = "/dev/video0";
     const char* fb_dev = "/dev/fb0";
+    const char* pxp_dev = "/dev/pxp_device";
 
     if(argc >= 2) {
         video_dev = argv[1];
@@ -23,6 +25,10 @@ int main(int argc, char** argv)
 
     if(argc >= 3) {
         fb_dev = argv[2];
+    }
+
+    if(argc >= 4) {
+        pxp_dev = argv[3];
     }
 
     signal(SIGINT, sigint_handler);
@@ -41,11 +47,16 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    camera_register_callback(&cam, lcd_live_preview);
-    camera_capture(&cam, fb.base_addr, fb.xres);
+    if(pxp_init(&pxp, 640, 480) < 0) {
+        perror("init pxp failed\n");
+        return -1;
+    }
+
+    camera_capture(&cam, fb.phy_addr, &pxp);
 
     lcd_release(&fb);
     camera_release(&cam);
+    pxp_deinit(&pxp);
 
     return 0;
 }

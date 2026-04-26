@@ -12,7 +12,7 @@ static void lcd_clear(void* base_addr, uint16_t xres, uint16_t yres, uint8_t bbp
 
     if(NULL == base_addr)   return;
 
-    memset(base_addr_ptr, 0x00, xres * yres * bbp / 8);
+    memset(base_addr_ptr, 0xFF, xres * yres * bbp / 8);
 }
 
 int lcd_init(Fb_DevType* dev, const char* file_name)
@@ -43,14 +43,15 @@ int lcd_init(Fb_DevType* dev, const char* file_name)
     dev->yres = var.yres;
     dev->bbp = var.bits_per_pixel;
     dev->len = fix.smem_len;
+    dev->phy_addr = fix.smem_start;
 
-    dev->base_addr = mmap(NULL, fix.smem_len, PROT_READ | PROT_WRITE, MAP_SHARED, dev->fd, 0);
-    if(MAP_FAILED == dev->base_addr) {
-        perror("fb mmap failed");
-        goto err_close;
-    }
+    // dev->base_addr = mmap(NULL, fix.smem_len, PROT_READ | PROT_WRITE, MAP_SHARED, dev->fd, 0);
+    // if(MAP_FAILED == dev->base_addr) {
+    //     perror("fb mmap failed");
+    //     goto err_close;
+    // }
 
-    lcd_clear(dev->base_addr, dev->xres, dev->yres, dev->bbp);
+    // lcd_clear(dev->base_addr, dev->xres, dev->yres, dev->bbp);
 
     return 0;
 
@@ -130,6 +131,6 @@ void lcd_release(Fb_DevType* dev)
 {
     if(NULL == dev) return;
 
-    munmap(dev->base_addr, dev->len);
+    // munmap(dev->base_addr, dev->len);
     close(dev->fd);
 }

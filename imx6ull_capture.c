@@ -34,30 +34,29 @@ struct imx6ull_csi_reg {
 	u32 CSI_CSICR19;
 };
 
-struct virtual_frame_buf {
+struct imx6ull_csi_frame_buf {
 	struct vb2_buffer vb;
 	struct list_head list;
 };
 
-struct virtual_cam {
+struct imx6ull_csi_dev {
 	struct device* dev;
     struct video_device* vdev;
     struct v4l2_device v4l2_dev;
     struct vb2_queue vb2_q;
     struct list_head queued_bufs;
-    struct timer_list stream_timer;
 	struct mutex v4l2_lock;
 	struct mutex vb_queue_lock;
 	spinlock_t queue_lock;
 	void __iomem *csi_base;
 	int irq_num;
-    struct virtual_frame_buf *active_fb1;
-    struct virtual_frame_buf *active_fb2;
+    struct imx6ull_csi_frame_buf *active_fb1;
+    struct imx6ull_csi_frame_buf *active_fb2;
 	struct vb2_alloc_ctx* alloc_ctx;
 	struct v4l2_pix_format pix;
 };
 
-static struct virtual_cam* cam;
+static struct imx6ull_csi_dev* cam;
 
 static void csi_enable_int(void __iomem * base, int arg)
 {
@@ -128,8 +127,6 @@ static void csi_enable(void __iomem * base, int arg)
 
 void imx6ull_csi_init(void __iomem * base)
 {
-	u32 image_para;
-
 	struct imx6ull_csi_reg* csi_base = (struct imx6ull_csi_reg*)base;
 
 	csi_base->CSI_CSICR3 = (1 << 15);
@@ -142,10 +139,10 @@ void imx6ull_csi_init(void __iomem * base)
 	/* init */
 	csi_base->CSI_CSICR1 |= (1 << 17) | (1 << 12) | (1 << 11) | (1 << 9) | (1 << 8) | (1 << 4) | (1 << 1);
 
-	image_para = (1280 << 16) | 480;
-	csi_base->CSI_CSIIMAG_PARA = image_para;
+	csi_base->CSI_CSIFBUF_PARA = 0;
+	csi_base->CSI_CSIIMAG_PARA = (1280 << 16) | 480;;
 
-	// csi_base->CSI_CSICR3 = (1 << 14);
+	csi_base->CSI_CSICR3 = (1 << 14);
 }
 
 static void csisw_reset(void __iomem *base)
@@ -153,18 +150,15 @@ static void csisw_reset(void __iomem *base)
 	struct imx6ull_csi_reg* csi_base = (struct imx6ull_csi_reg*)base;
 	u32 cr1, cr3, cr18, isr;
 
-	// 原厂软件复位流程，一字不差
 	cr18 = csi_base->CSI_CSICR18;
-	cr18 &= ~(1 << 31); // 关闭CSI
+	cr18 &= ~(1 << 31);
 	csi_base->CSI_CSICR18 = cr18;
 
-	// 清RX FIFO
 	cr1 = csi_base->CSI_CSICR1;
 	csi_base->CSI_CSICR1 = cr1 & ~(1 << 8);
 	cr1 = csi_base->CSI_CSICR1;
 	csi_base->CSI_CSICR1 = cr1 | (1 << 5); // BIT_CLR_RXFIFO
 
-	// DMA重刷
 	cr3 = csi_base->CSI_CSICR3;
 	cr3 |= (1 << 14) | (1 << 15);
 	csi_base->CSI_CSICR3 = cr3;
@@ -173,11 +167,9 @@ static void csisw_reset(void __iomem *base)
 	cr1 = csi_base->CSI_CSICR1;
 	csi_base->CSI_CSICR1 = cr1 | (1 << 8);
 
-	// 清中断
 	isr = csi_base->CSI_CSISR;
 	csi_base->CSI_CSISR = isr;
 
-	// 重新开启CSI
 	cr18 |= (1 << 31);
 	csi_base->CSI_CSICR18 = cr18;
 }
@@ -195,13 +187,12 @@ void csi_start(void)
 
 	for (timeout = 10000000; timeout > 0; timeout--) {
         status = csi_base->CSI_CSISR;
-        if (status & (1 << 16)) {  // BIT_SOF_INT
+        if (status & (1 << 16)) {
             cr3 = csi_base->CSI_CSICR3;
-            csi_base->CSI_CSICR3 = cr3 | (1 << 14);  // BIT_DMA_REFLASH_RFF
+            csi_base->CSI_CSICR3 = cr3 | (1 << 14);
             
-            // 必须等待DMA刷新完成！
             for (timeout2 = 1000000; timeout2 > 0; timeout2--) {
-                if (!(csi_base->CSI_CSICR3 & (1 << 14)))  // 等待BIT_DMA_REFLASH_RFF清零
+                if (!(csi_base->CSI_CSICR3 & (1 << 14)))
                     break;
                 cpu_relax();
             }
@@ -229,12 +220,12 @@ void csi_start(void)
 	local_irq_restore(flags);
 }
 
-static struct virtual_frame_buf* virtual_get_next_fill_buf(void)
+static struct imx6ull_csi_frame_buf* virtual_get_next_fill_buf(void)
 {
-	struct virtual_frame_buf* buf = NULL;
+	struct imx6ull_csi_frame_buf* buf = NULL;
 
 	if(!list_empty(&cam->queued_bufs)) {
-		buf = list_entry(cam->queued_bufs.next, struct virtual_frame_buf, list);
+		buf = list_entry(cam->queued_bufs.next, struct imx6ull_csi_frame_buf, list);
 		list_del(&buf->list);
 	}
 
@@ -243,9 +234,9 @@ static struct virtual_frame_buf* virtual_get_next_fill_buf(void)
 
 static irqreturn_t csi_irq_handler(int irq, void *para)
 {
-	struct virtual_cam* cam = (struct virtual_cam* )para;
+	struct imx6ull_csi_dev* cam = (struct imx6ull_csi_dev* )para;
     struct imx6ull_csi_reg *csi_base = (struct imx6ull_csi_reg *)cam->csi_base;
-    struct virtual_frame_buf *done_buf = NULL, *next = NULL;
+    struct imx6ull_csi_frame_buf *done_buf = NULL, *next = NULL;
     u32 status;
     dma_addr_t dma_addr;
     unsigned long flags;
@@ -254,6 +245,14 @@ static irqreturn_t csi_irq_handler(int irq, void *para)
 
     status = csi_base->CSI_CSISR;
     csi_base->CSI_CSISR = 0xffffffff;
+
+	if(status & (1 << 24)) {
+		printk("rxfifo overrun\n");
+	}
+
+	if(status & (1 << 7)) {
+		printk("hresponse Error\n");
+	}
 
 	if((status & (1 << 19)) && (status & (1 << 20))) {
 		printk("skip two frames\n");
@@ -292,7 +291,7 @@ unlock:
     return IRQ_HANDLED;
 }
 
-static int virtual_queue_setup(struct vb2_queue *q, const struct v4l2_format *fmt,
+static int imx6ull_queue_setup(struct vb2_queue *q, const struct v4l2_format *fmt,
         unsigned int *num_buffers, unsigned int *num_planes,
         unsigned int sizes[], void *alloc_ctxs[])
 {
@@ -308,9 +307,9 @@ static int virtual_queue_setup(struct vb2_queue *q, const struct v4l2_format *fm
     return 0;
 }
 
-static void virtual_buf_queue(struct vb2_buffer *vb)
+static void imx6ull_buf_queue(struct vb2_buffer *vb)
 {
-	struct virtual_frame_buf *buf = container_of(vb, struct virtual_frame_buf, vb);
+	struct imx6ull_csi_frame_buf *buf = container_of(vb, struct imx6ull_csi_frame_buf, vb);
 	unsigned long flags;
 
 	spin_lock_irqsave(&cam->queue_lock, flags);
@@ -318,10 +317,10 @@ static void virtual_buf_queue(struct vb2_buffer *vb)
 	spin_unlock_irqrestore(&cam->queue_lock, flags);
 }
 
-static int virtual_start_streaming(struct vb2_queue *q, unsigned int count)
+static int imx6ull_start_streaming(struct vb2_queue *q, unsigned int count)
 {
     struct imx6ull_csi_reg* csi_base = (struct imx6ull_csi_reg*)cam->csi_base;
-    struct virtual_frame_buf *buf;
+    struct imx6ull_csi_frame_buf *buf;
     dma_addr_t dma_addr;
     unsigned long flags;
 
@@ -359,9 +358,9 @@ static int virtual_start_streaming(struct vb2_queue *q, unsigned int count)
     return 0;
 }
 
-static void virtual_stop_streaming(struct vb2_queue *q)
+static void imx6ull_stop_streaming(struct vb2_queue *q)
 {
-	struct virtual_frame_buf *buf;
+	struct imx6ull_csi_frame_buf *buf;
 
     /* 停止硬件传输 */
 	csi_dmareq_rff_disable(cam->csi_base);
@@ -370,7 +369,7 @@ static void virtual_stop_streaming(struct vb2_queue *q)
 
 	while (!list_empty(&cam->queued_bufs)) {
 		buf = list_entry(cam->queued_bufs.next,
-		struct virtual_frame_buf, list);
+		struct imx6ull_csi_frame_buf, list);
 		list_del(&buf->list);
 		vb2_buffer_done(&buf->vb, VB2_BUF_STATE_ERROR);
 	}
@@ -379,25 +378,25 @@ static void virtual_stop_streaming(struct vb2_queue *q)
     cam->active_fb2 = NULL;
 }
 
-static int virtual_videobuf_prepare(struct vb2_buffer *vb)
+static int imx6ull_videobuf_prepare(struct vb2_buffer *vb)
 {
-	struct virtual_cam *csi_dev = vb2_get_drv_priv(vb->vb2_queue);
+	struct imx6ull_csi_dev *csi_dev = vb2_get_drv_priv(vb->vb2_queue);
 
 	vb2_set_plane_payload(vb, 0, csi_dev->pix.sizeimage);
 	return 0;
 }
 
-static struct vb2_ops virtual_vb2_ops = {
-	.queue_setup            = virtual_queue_setup,
-	.buf_prepare            = virtual_videobuf_prepare,
-	.buf_queue              = virtual_buf_queue,
-	.start_streaming        = virtual_start_streaming,
-	.stop_streaming         = virtual_stop_streaming,
+static struct vb2_ops imx6ull_vb2_ops = {
+	.queue_setup            = imx6ull_queue_setup,
+	.buf_prepare            = imx6ull_videobuf_prepare,
+	.buf_queue              = imx6ull_buf_queue,
+	.start_streaming        = imx6ull_start_streaming,
+	.stop_streaming         = imx6ull_stop_streaming,
 	.wait_prepare           = vb2_ops_wait_prepare,
 	.wait_finish            = vb2_ops_wait_finish,
 };
 
-static int virtual_querycap(struct file *file, void *fh, struct v4l2_capability *cap)
+static int imx6ull_querycap(struct file *file, void *fh, struct v4l2_capability *cap)
 {
     strlcpy(cap->driver, "my_virtual_videio", sizeof(cap->driver));
     strlcpy(cap->card, "no_card", sizeof(cap->card));
@@ -407,7 +406,7 @@ static int virtual_querycap(struct file *file, void *fh, struct v4l2_capability 
     return 0;
 }
 
-static int virtual_enum_fmt_vid_cap(struct file *file, void *fh,
+static int imx6ull_enum_fmt_vid_cap(struct file *file, void *fh,
         struct v4l2_fmtdesc *f)
 {
     if(f->index > 0)
@@ -419,7 +418,7 @@ static int virtual_enum_fmt_vid_cap(struct file *file, void *fh,
     return 0;
 }
 
-static int virtual_vidioc_g_fmt_vid_cap(struct file *file, void *fh,
+static int imx6ull_vidioc_g_fmt_vid_cap(struct file *file, void *fh,
 				struct v4l2_format *f)
 {
 	struct v4l2_pix_format* pix = &f->fmt.pix;
@@ -437,7 +436,7 @@ static int virtual_vidioc_g_fmt_vid_cap(struct file *file, void *fh,
 	return 0;
 }
 
-static int virtual_s_fmt_vid_cap(struct file *file, void *fh,
+static int imx6ull_s_fmt_vid_cap(struct file *file, void *fh,
         struct v4l2_format *f)
 {
     struct v4l2_pix_format* pix = &f->fmt.pix;
@@ -456,7 +455,7 @@ static int virtual_s_fmt_vid_cap(struct file *file, void *fh,
     return 0;
 }
 
-static int virtual_enum_framesizes(struct file *file, void *fh,
+static int imx6ull_enum_framesizes(struct file *file, void *fh,
         struct v4l2_frmsizeenum *fsize)
 {
     if(fsize->index > 0)
@@ -469,18 +468,37 @@ static int virtual_enum_framesizes(struct file *file, void *fh,
     return 0;
 }
 
-static const struct v4l2_ioctl_ops virtual_ioctl_ops = {
-	.vidioc_querycap          = virtual_querycap,
+static int imx6ull_vidioc_querybuf(struct file *file, void *priv, struct v4l2_buffer *p)
+{
+	struct imx6ull_csi_dev *csi_dev = video_drvdata(file);
+	int ret;
 
-	.vidioc_enum_fmt_vid_cap  = virtual_enum_fmt_vid_cap,
-	.vidioc_g_fmt_vid_cap	  = virtual_vidioc_g_fmt_vid_cap,
-	.vidioc_s_fmt_vid_cap     = virtual_s_fmt_vid_cap,
-    .vidioc_enum_framesizes   = virtual_enum_framesizes,
+	WARN_ON(priv != file->private_data);
+
+	ret = vb2_querybuf(&csi_dev->vb2_q, p);
+
+	if (!ret) {
+		/* return physical address */
+		struct vb2_buffer *vb = csi_dev->vb2_q.bufs[p->index];
+
+		if (p->flags & V4L2_BUF_FLAG_MAPPED)
+			p->m.offset = vb2_dma_contig_plane_dma_addr(vb, 0);
+	}
+	return ret;
+}
+
+static const struct v4l2_ioctl_ops imx6ull_ioctl_ops = {
+	.vidioc_querycap          = imx6ull_querycap,
+
+	.vidioc_enum_fmt_vid_cap  = imx6ull_enum_fmt_vid_cap,
+	.vidioc_g_fmt_vid_cap	  = imx6ull_vidioc_g_fmt_vid_cap,
+	.vidioc_s_fmt_vid_cap     = imx6ull_s_fmt_vid_cap,
+    .vidioc_enum_framesizes   = imx6ull_enum_framesizes,
 
 	.vidioc_reqbufs           = vb2_ioctl_reqbufs,
 	.vidioc_create_bufs       = vb2_ioctl_create_bufs,
 	.vidioc_prepare_buf       = vb2_ioctl_prepare_buf,
-	.vidioc_querybuf          = vb2_ioctl_querybuf,
+	.vidioc_querybuf          = imx6ull_vidioc_querybuf,
 	.vidioc_qbuf              = vb2_ioctl_qbuf,
 	.vidioc_dqbuf             = vb2_ioctl_dqbuf,
 	.vidioc_expbuf			  = vb2_ioctl_expbuf,
@@ -489,7 +507,7 @@ static const struct v4l2_ioctl_ops virtual_ioctl_ops = {
 	.vidioc_streamoff         = vb2_ioctl_streamoff,
 };
 
-static const struct v4l2_file_operations virtual_fops = {
+static const struct v4l2_file_operations imx6ull_fops = {
 	.owner                    = THIS_MODULE,
 	.open                     = v4l2_fh_open,
 	.release                  = vb2_fop_release,
@@ -546,8 +564,8 @@ int my_imx6ull_csi_probe(struct platform_device  * pdev)
 	cam->vb2_q.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	cam->vb2_q.io_modes = VB2_MMAP | VB2_DMABUF;
 	cam->vb2_q.drv_priv = cam;
-	cam->vb2_q.buf_struct_size = sizeof(struct virtual_frame_buf);
-	cam->vb2_q.ops = &virtual_vb2_ops;
+	cam->vb2_q.buf_struct_size = sizeof(struct imx6ull_csi_frame_buf);
+	cam->vb2_q.ops = &imx6ull_vb2_ops;
 	cam->vb2_q.mem_ops = &vb2_dma_contig_memops;
 	cam->vb2_q.timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
 	cam->vb2_q.lock = &cam->vb_queue_lock;
@@ -562,7 +580,7 @@ int my_imx6ull_csi_probe(struct platform_device  * pdev)
 	cam->vdev->queue = &cam->vb2_q;
 
     /* Register the v4l2_device structure */
-    strlcpy(cam->v4l2_dev.name, "virtual_dev", sizeof(cam->v4l2_dev.name));
+    strlcpy(cam->v4l2_dev.name, "imx6ull_dev", sizeof(cam->v4l2_dev.name));
     ret = v4l2_device_register(&pdev->dev, &cam->v4l2_dev);
     if(ret < 0) {
         printk("falied to register v4l2 device\n");
@@ -574,8 +592,9 @@ int my_imx6ull_csi_probe(struct platform_device  * pdev)
 
     /* Register video_device structure */
     cam->vdev->release = video_device_release_empty;
-    cam->vdev->fops = &virtual_fops;
-    cam->vdev->ioctl_ops = &virtual_ioctl_ops;
+    cam->vdev->fops = &imx6ull_fops;
+    cam->vdev->ioctl_ops = &imx6ull_ioctl_ops;
+	video_set_drvdata(cam->vdev, (void*)cam);
     ret = video_register_device(cam->vdev, VFL_TYPE_GRABBER, -1);
     if(ret < 0) {
         printk("falied to register video device\n");
