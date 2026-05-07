@@ -90,7 +90,7 @@ int pxp_yuyv_to_rgb565(void* dev, uint32_t cam_buf, uint32_t fb_buf, int cam_w, 
     return 0;
 }
 
-void pxp_deinit(Pxp_DevType* pDev)
+void pxp_release(Pxp_DevType* pDev)
 {
     ioctl(pDev->fd, PXP_IOC_PUT_CHAN, &pDev->chan_handle);
     close(pDev->fd);

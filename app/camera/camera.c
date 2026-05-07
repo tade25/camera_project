@@ -5,6 +5,11 @@
 #include <fcntl.h>
 #include <time.h>
 #include <sys/mman.h>
+#include <poll.h>
+#include <errno.h>
+
+#define MAX_RETRY_COUNT             3
+#define DQBUF_TIMEOUT_MS            2000
 
 static double camera_calc_fps(unsigned int frame_cnt, struct timespec* t_start)
 {
@@ -22,9 +27,9 @@ static double camera_calc_fps(unsigned int frame_cnt, struct timespec* t_start)
     return (double)frame_cnt / elapsed;
 }
 
-void camera_register_callback(V4l2_DevType* dev, frame_callback_t cbk)
+void camera_register_callback(V4l2_DevType* dev, fmt_cvrt_t cbk)
 {
-    dev->lcd_cbk = cbk;
+    dev->fmt_cvrt_cbk = cbk;
 }
 
 int camera_init(V4l2_DevType* dev, const char* file_name)
@@ -33,8 +38,16 @@ int camera_init(V4l2_DevType* dev, const char* file_name)
     struct v4l2_format fmt;
     struct v4l2_requestbuffers req;
     struct v4l2_buffer buf;
+    struct v4l2_fmtdesc fmtdesc;
+    struct v4l2_frmsizeenum frmsize;
+    struct v4l2_frmivalenum frmival;
+    struct v4l2_streamparm streamparm;
     enum v4l2_buf_type buf_type;
     int i;
+    int fmtdesc_index = 0;
+    int frmsize_index = 0;
+    int frmival_index = 0;
+    int target_fps;
 
     dev->fd = open(file_name, O_RDWR);
     if(dev->fd < 0) {
@@ -58,24 +71,73 @@ int camera_init(V4l2_DevType* dev, const char* file_name)
         goto err_close;
     }
 
+    while(1) {
+        memset(&fmtdesc, 0, sizeof(fmtdesc));
+        fmtdesc.index = fmtdesc_index;
+        fmtdesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        if(ioctl(dev->fd, VIDIOC_ENUM_FMT, &fmtdesc) < 0)
+            break;
+
+        while(1) {
+            memset(&frmsize, 0, sizeof(frmsize));
+            frmsize.index = frmsize_index;
+            frmsize.pixel_format = fmtdesc.pixelformat;
+            if(ioctl(dev->fd, VIDIOC_ENUM_FRAMESIZES, &frmsize) < 0)
+                break;
+            while(1) {
+                memset(&frmival, 0, sizeof(frmival));
+                frmival.index = frmival_index;
+                frmival.pixel_format = fmtdesc.pixelformat;
+                frmival.width = frmsize.discrete.width;
+                frmival.height = frmsize.discrete.height;
+                if(ioctl(dev->fd, VIDIOC_ENUM_FRAMEINTERVALS, &frmival) < 0)
+                    break;
+
+                printf("supported format: %s %dx%d@%dfps\n", fmtdesc.description, frmsize.discrete.width, frmsize.discrete.height,\
+                        frmival.discrete.denominator / frmival.discrete.numerator);
+                frmival_index++;
+            }
+            frmsize_index++;
+            frmival_index = 0;
+        }
+        fmtdesc_index++;
+        frmsize_index = 0;
+        frmival_index = 0;
+    }
+
     memset(&fmt, 0, sizeof(fmt));
-    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     fmt.fmt.pix.width = CAMERA_WIDTH;
     fmt.fmt.pix.height = CAMERA_HEIHET;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-    fmt.fmt.pix.field = V4L2_FIELD_NONE;
-
-    if (ioctl(dev->fd, VIDIOC_S_FMT, &fmt) < 0) {
+    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if(ioctl(dev->fd, VIDIOC_S_FMT, &fmt) < 0) {
         perror("set format failed\n");
         goto err_close;
     }
 
     if((CAMERA_WIDTH == fmt.fmt.pix.width) &&\
-        (CAMERA_HEIHET == fmt.fmt.pix.height) &&\
-        (V4L2_PIX_FMT_YUYV == fmt.fmt.pix.pixelformat)) {
-        printf("set the format correctly\n");
-    } else {
-        printf("driver adjusted the requested format\n");
+        (CAMERA_HEIHET == fmt.fmt.pix.height)) {
+        printf("set format successfully\n");
+    }else {
+        printf("format adjusted to driver, format: %dx%d\n", fmt.fmt.pix.width, fmt.fmt.pix.height);
+    }
+
+    dev->width = fmt.fmt.pix.width;
+    dev->height = fmt.fmt.pix.height;
+
+    memset(&streamparm, 0, sizeof(streamparm));
+    streamparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    streamparm.parm.capture.timeperframe.numerator = 1;
+    streamparm.parm.capture.timeperframe.denominator = 15;
+    target_fps = streamparm.parm.capture.timeperframe.denominator / streamparm.parm.capture.timeperframe.numerator;
+    if(ioctl(dev->fd, VIDIOC_S_PARM, &streamparm) < 0) {
+        perror("set parm failed\n");
+        goto err_close;
+    }
+
+    if(target_fps == streamparm.parm.capture.timeperframe.denominator / streamparm.parm.capture.timeperframe.numerator) {
+        printf("set parm successfully\n");
+    }else {
+        printf("parm adjusted to driver, fps: %d\n", streamparm.parm.capture.timeperframe.denominator / streamparm.parm.capture.timeperframe.numerator);
     }
 
     memset(&req, 0, sizeof(req));
@@ -148,19 +210,41 @@ err_open:
     return -1;
 }
 
-extern int pxp_yuyv_to_rgb565(void* dev, uint32_t cam_buf, uint32_t fb_buf, int cam_w, int cam_h);
 void camera_capture(V4l2_DevType* dev, uint32_t fb_buf, void* pxp_dev)
 {
+    struct pollfd pfd;
     struct timespec t_start;
     struct v4l2_buffer buf;
     unsigned int frame_cnt = 0;
     double fps;
-    FILE *raw_fp;
-    char filename[128];
+    int ret;
+    int retry;
+
+    pfd.fd = dev->fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
 
     clock_gettime(CLOCK_MONOTONIC, &t_start);
+
     while(dev->is_running) {
-    // for(frame_cnt = 0;frame_cnt < 200;frame_cnt++) {
+        retry = 0;
+
+        while(retry < MAX_RETRY_COUNT) {
+            ret = poll(&pfd, 1, DQBUF_TIMEOUT_MS);
+            if(ret < 0) {
+                if(EINTR == errno)
+                    goto exit;
+                printf("poll failed\n");
+                goto exit;
+            }else if(0 == ret) {
+                retry++;
+                printf("capture timeout retry%d\n", retry);
+                continue;
+            }
+
+            break;
+        }
+
         memset(&buf, 0, sizeof(buf));
         buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         buf.memory = V4L2_MEMORY_MMAP;
@@ -169,16 +253,8 @@ void camera_capture(V4l2_DevType* dev, uint32_t fb_buf, void* pxp_dev)
             break;
         }
 
-        // snprintf(filename, sizeof(filename), "/frame_%04u.yuyv", frame_cnt);
-        // raw_fp = fopen(filename, "wb");
-        // if (raw_fp) {
-        //     fwrite(dev->buffers[buf.index].start, 1, buf.bytesused, raw_fp);
-        //     fclose(raw_fp);
-        //     printf("保存第 %d 帧：%s\n", frame_cnt, filename);
-        // } else {
-        //     perror("fopen failed");
-        // }
-        pxp_yuyv_to_rgb565(pxp_dev, dev->buffers[buf.index].phy_addr, fb_buf, 640, 480);
+        if(dev->fmt_cvrt_cbk)
+            dev->fmt_cvrt_cbk(pxp_dev, dev->buffers[buf.index].phy_addr, fb_buf, dev->width, dev->height);
 
         if(ioctl(dev->fd, VIDIOC_QBUF, &buf) < 0) {
             perror("qbuf failed\n");
@@ -191,6 +267,8 @@ void camera_capture(V4l2_DevType* dev, uint32_t fb_buf, void* pxp_dev)
             printf("[debug] average FPS=%.2f\n", fps);
         }
     }
+exit:
+    dev->is_running = 0;
 }
 
 void camera_release(V4l2_DevType* dev)

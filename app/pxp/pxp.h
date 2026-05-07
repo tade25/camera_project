@@ -16,6 +16,7 @@ typedef struct
 }Pxp_DevType;
 
 extern int pxp_init(Pxp_DevType* pDev, uint16_t cam_w, uint16_t cam_h);
-extern void pxp_deinit(Pxp_DevType* pDev);
+extern int pxp_yuyv_to_rgb565(void* dev, uint32_t cam_buf, uint32_t fb_buf, int cam_w, int cam_h);
+extern void pxp_release(Pxp_DevType* pDev);
 
 #endif

@@ -56,6 +56,11 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_csi1>;
 		status = "okay";
+		port {
+			csi_ep: endpoint {
+				remote-endpoint = <&ov5640_ep>;
+			};
+		};
 	};
 
 	pxp_v4l2 {
@@ -255,6 +260,11 @@
 		pinctrl-0 = <&pinctrl_ov5640>;
 		reset-gpios = <&gpio1 2 GPIO_ACTIVE_HIGH>;
 		pwdn-gpios = <&gpio1 4 GPIO_ACTIVE_HIGH>;
+		port {
+			ov5640_ep: endpoint {
+				remote-endpoint = <&csi_ep>;
+			};
+		};
 	};
 };
 

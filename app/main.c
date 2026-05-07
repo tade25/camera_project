@@ -47,16 +47,18 @@ int main(int argc, char** argv)
         return -1;
     }
 
-    if(pxp_init(&pxp, 640, 480) < 0) {
+    if(pxp_init(&pxp, cam.width, cam.height) < 0) {
         perror("init pxp failed\n");
         return -1;
     }
+
+    camera_register_callback(&cam, pxp_yuyv_to_rgb565);
 
     camera_capture(&cam, fb.phy_addr, &pxp);
 
     lcd_release(&fb);
     camera_release(&cam);
-    pxp_deinit(&pxp);
+    pxp_release(&pxp);
 
     return 0;
 }
