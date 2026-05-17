@@ -1,21 +1,25 @@
 cmake_minimum_required(VERSION 3.16)
 
+# 交叉编译配置
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 set(CMAKE_C_COMPILER arm-linux-gnueabihf-gcc)
 
-project(camera_project VERSION 0.2.0)
+project(camera_project VERSION 0.4.0)
 
-add_subdirectory(camera)
-add_subdirectory(lcd)
-add_subdirectory(pxp)
+add_compile_options(-Wall -Wextra)
+
+# 添加子目录
+add_subdirectory(common)
+add_subdirectory(core)
+add_subdirectory(device)
+add_subdirectory(service)
 
 add_executable(capture
     main.c
 )
 
 target_link_libraries(capture
-    camera
-    lcd
-    pxp    
+    PRIVATE
+    service
 )

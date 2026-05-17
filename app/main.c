@@ -1,64 +1,66 @@
 #include <signal.h>
-#include "lcd.h"
-#include "camera.h"
-#include "pxp.h"
+#include <unistd.h>
+#include "display_service.h"
+#include "capture_service.h"
+#include "frame_pipeline.h"
 
-static V4l2_DevType* camera_dev_ptr = NULL;
+static volatile sig_atomic_t g_stop = 0;
 
-void sigint_handler(int signo) {
-    camera_dev_ptr->is_running = 0;
-    printf("exit: signal SIGINT\n");
+static void sigint_handler(int signo)
+{
+    (void)signo;
+
+    g_stop = 1;
 }
 
 int main(int argc, char** argv)
 {
-    V4l2_DevType cam;
-    Fb_DevType fb;
-    Pxp_DevType pxp;
-    const char* video_dev = "/dev/video0";
-    const char* fb_dev = "/dev/fb0";
-    const char* pxp_dev = "/dev/pxp_device";
+    (void)argv;
 
-    if(argc >= 2) {
-        video_dev = argv[1];
-    }
+    Ring_Buffer_t rb;
+    display_service_t disp_svc = {0};
+    capture_service_t capture_svc = {0};
+    Camera_DevType cam = {
+        .fd = -1,
+    };
+    Lcd_DevType lcd = {
+        .fd = -1,
+    };
+    Pxp_DevType pxp = {
+        .fd = -1,
+    };
+    int ret;
 
-    if(argc >= 3) {
-        fb_dev = argv[2];
-    }
-
-    if(argc >= 4) {
-        pxp_dev = argv[3];
+    if(argc != 1) {
+        fprintf(stderr, "usage: ./capture");
+        return -1;
     }
 
     signal(SIGINT, sigint_handler);
 
-    memset(&fb, 0, sizeof(fb));
-    if(lcd_init(&fb, fb_dev) < 0) {
-        perror("lcd failed\n");
+    frame_pipeline_init(&rb);
+
+    disp_svc.lcd_dev = &lcd;
+    disp_svc.pxp_dev = &pxp;
+    disp_svc.rb = &rb;
+    ret = display_service_start(&disp_svc);
+    if(ret < 0)
         return -1;
+
+    capture_svc.cam_dev = &cam;
+    capture_svc.rb = &rb;
+    ret = capture_service_start(&capture_svc);
+    if(ret < 0)
+        return -1;
+
+    while(!g_stop) {
+        pause();
     }
 
-    memset(&cam, 0, sizeof(cam));
-    camera_dev_ptr = &cam;
-    camera_dev_ptr->is_running = 1;
-    if(camera_init(&cam, video_dev) < 0) {
-        perror("init v4l2 failed\n");
-        return -1;
-    }
-
-    if(pxp_init(&pxp, cam.width, cam.height) < 0) {
-        perror("init pxp failed\n");
-        return -1;
-    }
-
-    camera_register_callback(&cam, pxp_yuyv_to_rgb565);
-
-    camera_capture(&cam, fb.phy_addr, &pxp);
-
-    lcd_release(&fb);
-    camera_release(&cam);
-    pxp_release(&pxp);
+    capture_service_stop(&capture_svc);
+    display_service_stop(&disp_svc);
+    
+    frame_pipeline_destroy(&rb);
 
     return 0;
 }

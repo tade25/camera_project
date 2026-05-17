@@ -2,37 +2,17 @@
 #include <linux/videodev2.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <fcntl.h>
-#include <time.h>
 #include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <errno.h>
+#include <unistd.h>
 
 #define MAX_RETRY_COUNT             3
 #define DQBUF_TIMEOUT_MS            2000
 
-static double camera_calc_fps(unsigned int frame_cnt, struct timespec* t_start)
-{
-    double elapsed;
-    struct timespec t_now;
-
-    if(!t_start || (0 == frame_cnt))
-        return 0.0;
-
-    clock_gettime(CLOCK_MONOTONIC, &t_now);
-
-    elapsed = (double)(t_now.tv_sec - t_start->tv_sec) +\
-            (double)(t_now.tv_nsec - t_start->tv_nsec) / 1e9;
-
-    return (double)frame_cnt / elapsed;
-}
-
-void camera_register_callback(V4l2_DevType* dev, fmt_cvrt_t cbk)
-{
-    dev->fmt_cvrt_cbk = cbk;
-}
-
-int camera_init(V4l2_DevType* dev, const char* file_name)
+int camera_init(Camera_DevType* dev, const char* file_name)
 {
     struct v4l2_capability cap;
     struct v4l2_format fmt;
@@ -43,11 +23,11 @@ int camera_init(V4l2_DevType* dev, const char* file_name)
     struct v4l2_frmivalenum frmival;
     struct v4l2_streamparm streamparm;
     enum v4l2_buf_type buf_type;
-    int i;
     int fmtdesc_index = 0;
     int frmsize_index = 0;
     int frmival_index = 0;
-    int target_fps;
+    uint32_t target_fps;
+    uint32_t i;
 
     dev->fd = open(file_name, O_RDWR);
     if(dev->fd < 0) {
@@ -188,14 +168,14 @@ int camera_init(V4l2_DevType* dev, const char* file_name)
         dev->buffers[i].phy_addr = buf.m.offset;
     }
 
+    printf("=========== start to capture ===========\n");
+    
     memset(&buf_type, 0, sizeof(buf_type));
     buf_type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if(ioctl(dev->fd, VIDIOC_STREAMON, &buf_type) < 0) {
         perror("stream on failed\n");
         goto err_munmap;
     }
-
-    printf("start to capture\n");
 
     return 0;
 
@@ -210,13 +190,10 @@ err_open:
     return -1;
 }
 
-void camera_capture(V4l2_DevType* dev, uint32_t fb_buf, void* pxp_dev)
+int camera_capture(Camera_DevType* dev, Camera_FrameType* output_frame)
 {
     struct pollfd pfd;
-    struct timespec t_start;
     struct v4l2_buffer buf;
-    unsigned int frame_cnt = 0;
-    double fps;
     int ret;
     int retry;
 
@@ -224,54 +201,54 @@ void camera_capture(V4l2_DevType* dev, uint32_t fb_buf, void* pxp_dev)
     pfd.events = POLLIN;
     pfd.revents = 0;
 
-    clock_gettime(CLOCK_MONOTONIC, &t_start);
+    retry = 0;
 
-    while(dev->is_running) {
-        retry = 0;
-
-        while(retry < MAX_RETRY_COUNT) {
-            ret = poll(&pfd, 1, DQBUF_TIMEOUT_MS);
-            if(ret < 0) {
-                if(EINTR == errno)
-                    goto exit;
-                printf("poll failed\n");
+    while(retry < MAX_RETRY_COUNT) {
+        ret = poll(&pfd, 1, DQBUF_TIMEOUT_MS);
+        if(ret < 0) {
+            if(EINTR == errno)
                 goto exit;
-            }else if(0 == ret) {
-                retry++;
-                printf("capture timeout retry%d\n", retry);
-                continue;
-            }
-
-            break;
+            printf("poll failed\n");
+            goto exit;
+        }else if(0 == ret) {
+            retry++;
+            printf("capture timeout retry%d\n", retry);
+            continue;
         }
-
-        memset(&buf, 0, sizeof(buf));
-        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        buf.memory = V4L2_MEMORY_MMAP;
-        if(ioctl(dev->fd, VIDIOC_DQBUF, &buf) < 0) {
-            perror("failed to dqbuf");
-            break;
-        }
-
-        if(dev->fmt_cvrt_cbk)
-            dev->fmt_cvrt_cbk(pxp_dev, dev->buffers[buf.index].phy_addr, fb_buf, dev->width, dev->height);
-
-        if(ioctl(dev->fd, VIDIOC_QBUF, &buf) < 0) {
-            perror("qbuf failed\n");
-            break;
-        }
-
-        frame_cnt++;
-        if(0 == (frame_cnt % 60)) {
-            fps = camera_calc_fps(frame_cnt, &t_start);
-            printf("[debug] average FPS=%.2f\n", fps);
-        }
+        break;
     }
+
+    memset(&buf, 0, sizeof(buf));
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+    if(ioctl(dev->fd, VIDIOC_DQBUF, &buf) < 0) {
+        perror("failed to dqbuf");
+        goto exit;
+    }
+
+    output_frame->phy_addr = dev->buffers[buf.index].phy_addr;
+    output_frame->width = dev->width;
+    output_frame->height = dev->height;
+    output_frame->index = buf.index;
 exit:
-    dev->is_running = 0;
+    return -1;
 }
 
-void camera_release(V4l2_DevType* dev)
+void camera_queue_buffer(Camera_DevType* dev, uint32_t index)
+{
+    struct v4l2_buffer buf;
+
+    memset(&buf, 0, sizeof(buf));
+    buf.index = index;
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+
+    if(ioctl(dev->fd, VIDIOC_QBUF, &buf) < 0) {
+        perror("qbuf failed\n");
+    }
+}
+
+void camera_release(Camera_DevType* dev)
 {
     enum v4l2_buf_type buf_type;
     int i;
@@ -281,8 +258,6 @@ void camera_release(V4l2_DevType* dev)
     if(ioctl(dev->fd, VIDIOC_STREAMOFF, &buf_type) < 0) {
         perror("stream off failed\n");
     }
-
-    printf("end of capture\n");
 
     for(i = 0;i < dev->buf_cnt;i++) {
         if (dev->buffers[i].start)
