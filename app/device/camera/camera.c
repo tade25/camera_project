@@ -195,28 +195,24 @@ int camera_capture(Camera_DevType* dev, Camera_FrameType* output_frame)
     struct pollfd pfd;
     struct v4l2_buffer buf;
     int ret;
-    int retry;
+    int retry = 0;
 
     pfd.fd = dev->fd;
     pfd.events = POLLIN;
     pfd.revents = 0;
 
-    retry = 0;
-
-    while(retry < MAX_RETRY_COUNT) {
+    do {
         ret = poll(&pfd, 1, DQBUF_TIMEOUT_MS);
         if(ret < 0) {
             if(EINTR == errno)
                 goto exit;
-            printf("poll failed\n");
+            printf("poll failed, errno=%d\n", errno);
             goto exit;
         }else if(0 == ret) {
             retry++;
             printf("capture timeout retry%d\n", retry);
-            continue;
         }
-        break;
-    }
+    }while((0 == ret) && (retry < MAX_RETRY_COUNT));
 
     memset(&buf, 0, sizeof(buf));
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -230,6 +226,8 @@ int camera_capture(Camera_DevType* dev, Camera_FrameType* output_frame)
     output_frame->width = dev->width;
     output_frame->height = dev->height;
     output_frame->index = buf.index;
+
+    return 0;
 exit:
     return -1;
 }

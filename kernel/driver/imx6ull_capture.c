@@ -379,12 +379,16 @@ static void imx6ull_stop_streaming(struct vb2_queue *q)
 
 	spin_lock_irqsave(&csi_dev->queue_lock, flags);
 
-	if(VB2_BUF_STATE_ACTIVE == csi_dev->active_fb1->vb.state) {
-		vb2_buffer_done(&csi_dev->active_fb1->vb, VB2_BUF_STATE_ERROR);
+	if(NULL != csi_dev->active_fb1) {
+		if(VB2_BUF_STATE_ACTIVE == csi_dev->active_fb1->vb.state) {
+			vb2_buffer_done(&csi_dev->active_fb1->vb, VB2_BUF_STATE_ERROR);
+		}
 	}
 
-	if(VB2_BUF_STATE_ACTIVE == csi_dev->active_fb2->vb.state) {
-		vb2_buffer_done(&csi_dev->active_fb2->vb, VB2_BUF_STATE_ERROR);
+	if(NULL != csi_dev->active_fb2) {
+		if(VB2_BUF_STATE_ACTIVE == csi_dev->active_fb2->vb.state) {
+			vb2_buffer_done(&csi_dev->active_fb2->vb, VB2_BUF_STATE_ERROR);
+		}
 	}
 
 	while (!list_empty(&csi_dev->queued_bufs)) {
@@ -686,9 +690,6 @@ int my_imx6ull_csi_probe(struct platform_device  * pdev)
 {
 	struct imx6ull_csi_dev* csi_dev;
 	struct resource* res;
-	struct clk * axi;
-	struct clk * mclk;
-	struct clk * dcic;
 	int irq;
 	int ret;
 
@@ -722,27 +723,27 @@ int my_imx6ull_csi_probe(struct platform_device  * pdev)
 		return ret;
 	}
 
-	axi = devm_clk_get(&pdev->dev, "disp-axi");
-	if(IS_ERR(axi))
-		return PTR_ERR(axi);
+	csi_dev->axi = devm_clk_get(&pdev->dev, "disp-axi");
+	if(IS_ERR(csi_dev->axi))
+		return PTR_ERR(csi_dev->axi);
 
-	mclk = devm_clk_get(&pdev->dev, "csi_mclk");
-	if(IS_ERR(mclk))
-		return PTR_ERR(mclk);
+	csi_dev->mclk = devm_clk_get(&pdev->dev, "csi_mclk");
+	if(IS_ERR(csi_dev->mclk))
+		return PTR_ERR(csi_dev->mclk);
 	
-	dcic = devm_clk_get(&pdev->dev, "disp_dcic");
-	if(IS_ERR(dcic))
-		return PTR_ERR(dcic);
+	csi_dev->dcic = devm_clk_get(&pdev->dev, "disp_dcic");
+	if(IS_ERR(csi_dev->dcic))
+		return PTR_ERR(csi_dev->dcic);
 
-	ret = clk_prepare_enable(axi);
+	ret = clk_prepare_enable(csi_dev->axi);
 	if(ret < 0)
 		return ret;
 	
-	ret = clk_prepare_enable(mclk);
+	ret = clk_prepare_enable(csi_dev->mclk);
 	if(ret < 0)
 		goto err_prepare_axi;
 
-	ret = clk_prepare_enable(dcic);
+	ret = clk_prepare_enable(csi_dev->dcic);
 	if(ret < 0)
 		goto err_prepare_mclk;
 	
@@ -825,11 +826,11 @@ err_vb2:
 err_alloc_video_device:
 	vb2_dma_contig_cleanup_ctx(csi_dev->alloc_ctx);
 err_dma_contig_init:
-	clk_disable_unprepare(dcic);
+	clk_disable_unprepare(csi_dev->dcic);
 err_prepare_mclk:
-	clk_disable_unprepare(mclk);
+	clk_disable_unprepare(csi_dev->mclk);
 err_prepare_axi:
-	clk_disable_unprepare(axi);
+	clk_disable_unprepare(csi_dev->axi);
 
 	return ret;
 }

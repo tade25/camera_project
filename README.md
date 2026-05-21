@@ -24,3 +24,9 @@
 - 优化CMake构建配置，启用-Wall、-Wextra, 并清理存在的警告
 - 去除PXP/LCD相关硬编码参数，提升代码可维护性
 - 补充并修正README.md
+
+## v0.3.2(2026-05-21)
+- 修复imx6ull_stop_streaming中直接访问active_fb1/active_fb2但未判断是否为空的问题
+- 修复my_imx6ull_csi_remove中使用csi_dev->dcic/mclk/axi但probe中未初始化的问题
+- 修复ring_buffer_set时buffer满未释放互斥锁的问题
+- 优化camera_capture函数中的超时重试机制修改为do while

@@ -18,8 +18,10 @@ int ring_buffer_set(Ring_Buffer_t* rb, void* buffer)
 {
     pthread_mutex_lock(&rb->mutex);
 
-    if(ring_buffer_is_full(rb))
+    if(ring_buffer_is_full(rb)) {
+        pthread_mutex_unlock(&rb->mutex);
         return -1;
+    }
 
     rb->buffers[rb->write] = buffer;
     rb->write = (rb->write + 1) % RING_BUFFER_NUMBER;
