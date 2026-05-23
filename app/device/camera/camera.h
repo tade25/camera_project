@@ -7,7 +7,7 @@
 
 #define REQ_BUF_COUNT           16
 #define CAMERA_WIDTH            1280
-#define CAMERA_HEIHET           720
+#define CAMERA_HEIGHT           720
 
 struct buffer {
     void* start;

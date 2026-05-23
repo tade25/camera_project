@@ -3,6 +3,7 @@
 #include <linux/gpio/consumer.h>
 #include <linux/delay.h>
 #include <media/v4l2-subdev.h>
+#include <media/v4l2-ctrls.h>
 
 #define MY_OV5640_ARRAY_SIZE(x) sizeof(x) / sizeof((x)[0])
 
@@ -36,6 +37,7 @@ struct ov5640_dev {
 	struct ov5640_mode* current_mode;
 	struct gpio_desc* reset_desc;
 	struct gpio_desc* pwdn_desc;
+	struct v4l2_ctrl_handler ctrl_handler;
 };
 
 static struct ov5640_dev ov5640;
@@ -222,6 +224,75 @@ static int i2c_ov5640_read(struct i2c_client *clit, u16 reg_addr,
     return ((ret == 2) ? 0 : (ret < 0) ? ret : -EIO);
 }
 
+static int ov5640_set_brightness(struct ov5640_dev* dev, int brightness)
+{
+	struct reg_value reg_data[5] = {
+		{0x3212, 0x03}, {0x5587, 0x00},
+		{0x5588, 0x00}, {0x3212, 0x13},
+		{0x3212, 0xa3},
+	};
+	int i;
+
+	if((brightness < -128) || (brightness > 127))	
+		return -EINVAL;
+	
+	if(brightness >= 0) {
+		if(0 == brightness) {
+			reg_data[1].reg_val = 0;
+		}else {
+			reg_data[1].reg_val = brightness;
+		}
+		reg_data[2].reg_val = 0x01;
+	}else {
+		reg_data[1].reg_val = (-brightness);
+		reg_data[2].reg_val = 0x09;
+	}
+
+    for(i = 0;i < 5;i++) {
+        (void)i2c_ov5640_write(dev->client, reg_data[i].reg, &reg_data[i].reg_val, 1);
+    }
+
+	return 0;
+}
+
+static int ov5640_set_contrast(struct ov5640_dev* dev, int contrast)
+{
+	struct reg_value reg_data[5] = {
+		{0x3212, 0x03}, {0x5586, 0x00},
+		{0x5585, 0x00}, {0x3212, 0x13},
+		{0x3212, 0xa3},
+	};
+	int level;
+	int i;
+
+	if((contrast < 0) || (contrast > 255))	
+		return -EINVAL;
+	
+    if (contrast <= 36)       level = -3;
+    else if (contrast <= 72)  level = -2;
+    else if (contrast <= 108) level = -1;
+    else if (contrast <= 144) level = 0;
+    else if (contrast <= 180) level = +1;
+    else if (contrast <= 216) level = +2;
+    else                      level = +3;
+
+    switch (level) {
+        case -3: reg_data[1].reg_val = 0x14; reg_data[2].reg_val = 0x14; break;
+        case -2: reg_data[1].reg_val = 0x18; reg_data[2].reg_val = 0x18; break;
+        case -1: reg_data[1].reg_val = 0x1C; reg_data[2].reg_val = 0x1C; break;
+        case 0:  reg_data[1].reg_val = 0x20; reg_data[2].reg_val = 0x00; break;
+        case +1: reg_data[1].reg_val = 0x24; reg_data[2].reg_val = 0x10; break;
+        case +2: reg_data[1].reg_val = 0x28; reg_data[2].reg_val = 0x18; break;
+        case +3: reg_data[1].reg_val = 0x2C; reg_data[2].reg_val = 0x1C; break;
+    }
+
+    for(i = 0;i < 5;i++) {
+        (void)i2c_ov5640_write(dev->client, reg_data[i].reg, &reg_data[i].reg_val, 1);
+    }
+
+	return 0;
+}
+
 static void ov5640_global_init(struct ov5640_dev* dev)
 {
     u8 i;
@@ -396,8 +467,47 @@ static const struct v4l2_subdev_ops ov5640_subdev_ops = {
 	.pad = &ov5640_subdev_pad_ops,
 };
 
+static int ov5640_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
+{
+
+	return 0;
+}
+
+static int ov5640_s_ctrl(struct v4l2_ctrl *ctrl)
+{
+	int ret;
+
+	switch (ctrl->id)
+	{
+	case V4L2_CID_BRIGHTNESS:
+		ret = ov5640_set_brightness(&ov5640, ctrl->val);
+		if(ret < 0)
+			return ret;
+		break;
+	case V4L2_CID_CONTRAST:
+		ret = ov5640_set_contrast(&ov5640, ctrl->val);
+		if(ret < 0)
+			return ret;
+		break;
+	case V4L2_CID_SATURATION:
+
+		printk("saturation: %d\n", ctrl->val);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static struct v4l2_ctrl_ops ov5640_ctrl_ops = {
+	.g_volatile_ctrl = ov5640_g_volatile_ctrl,
+	.s_ctrl = ov5640_s_ctrl,
+};
+
 static int ov5640_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
+	struct v4l2_ctrl *ctrl;
 	struct reg_value reg_data[] = {
 		{0x302c, 0x03}, {0x4740, 0x25},
 	};
@@ -454,6 +564,35 @@ static int ov5640_probe(struct i2c_client *client, const struct i2c_device_id *i
 		(void)i2c_ov5640_write(client, reg_data[i].reg, &reg_data[i].reg_val, 1);
 	}
 
+	ret = v4l2_ctrl_handler_init(&ov5640.ctrl_handler, 8);
+	if(ret < 0) {
+		dev_err(&client->dev, "failed to init ctrl handler\n");
+		return ret;
+	}
+
+	ctrl = v4l2_ctrl_new_std(&ov5640.ctrl_handler, &ov5640_ctrl_ops,
+			V4L2_CID_BRIGHTNESS, -128, 127, 1, 0);
+	if(!ctrl) {
+		dev_err(&client->dev, "failed to create brightness control\n");
+		return -ENOMEM;
+	}
+
+	ctrl = v4l2_ctrl_new_std(&ov5640.ctrl_handler, &ov5640_ctrl_ops,\
+			V4L2_CID_CONTRAST, 0, 255, 1, 128);
+	if(!ctrl) {
+		dev_err(&client->dev, "failed to create contrast control\n");
+		return -ENOMEM;
+	}
+
+	ctrl = v4l2_ctrl_new_std(&ov5640.ctrl_handler, &ov5640_ctrl_ops,\
+			V4L2_CID_SATURATION, 0, 255, 1, 128);
+	if(!ctrl) {
+		dev_err(&client->dev, "failed to create saturation control\n");
+		return -ENOMEM;
+	}
+
+	ov5640.subdev.ctrl_handler = &ov5640.ctrl_handler;
+
 	v4l2_i2c_subdev_init(&ov5640.subdev, ov5640.client, &ov5640_subdev_ops);
 	ret = v4l2_async_register_subdev(&ov5640.subdev);
 	if(ret < 0) {
@@ -470,6 +609,7 @@ static int ov5640_probe(struct i2c_client *client, const struct i2c_device_id *i
 
 static int ov5640_remove(struct i2c_client *client)
 {
+	v4l2_ctrl_handler_free(&ov5640.ctrl_handler);
 	v4l2_async_unregister_subdev(&ov5640.subdev);
 	gpiod_set_value(ov5640.reset_desc, 0);
 	gpiod_set_value(ov5640.pwdn_desc, 0);

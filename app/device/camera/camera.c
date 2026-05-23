@@ -18,14 +18,8 @@ int camera_init(Camera_DevType* dev, const char* file_name)
     struct v4l2_format fmt;
     struct v4l2_requestbuffers req;
     struct v4l2_buffer buf;
-    struct v4l2_fmtdesc fmtdesc;
-    struct v4l2_frmsizeenum frmsize;
-    struct v4l2_frmivalenum frmival;
     struct v4l2_streamparm streamparm;
     enum v4l2_buf_type buf_type;
-    int fmtdesc_index = 0;
-    int frmsize_index = 0;
-    int frmival_index = 0;
     uint32_t target_fps;
     uint32_t i;
 
@@ -51,43 +45,9 @@ int camera_init(Camera_DevType* dev, const char* file_name)
         goto err_close;
     }
 
-    while(1) {
-        memset(&fmtdesc, 0, sizeof(fmtdesc));
-        fmtdesc.index = fmtdesc_index;
-        fmtdesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        if(ioctl(dev->fd, VIDIOC_ENUM_FMT, &fmtdesc) < 0)
-            break;
-
-        while(1) {
-            memset(&frmsize, 0, sizeof(frmsize));
-            frmsize.index = frmsize_index;
-            frmsize.pixel_format = fmtdesc.pixelformat;
-            if(ioctl(dev->fd, VIDIOC_ENUM_FRAMESIZES, &frmsize) < 0)
-                break;
-            while(1) {
-                memset(&frmival, 0, sizeof(frmival));
-                frmival.index = frmival_index;
-                frmival.pixel_format = fmtdesc.pixelformat;
-                frmival.width = frmsize.discrete.width;
-                frmival.height = frmsize.discrete.height;
-                if(ioctl(dev->fd, VIDIOC_ENUM_FRAMEINTERVALS, &frmival) < 0)
-                    break;
-
-                printf("supported format: %s %dx%d@%dfps\n", fmtdesc.description, frmsize.discrete.width, frmsize.discrete.height,\
-                        frmival.discrete.denominator / frmival.discrete.numerator);
-                frmival_index++;
-            }
-            frmsize_index++;
-            frmival_index = 0;
-        }
-        fmtdesc_index++;
-        frmsize_index = 0;
-        frmival_index = 0;
-    }
-
     memset(&fmt, 0, sizeof(fmt));
     fmt.fmt.pix.width = CAMERA_WIDTH;
-    fmt.fmt.pix.height = CAMERA_HEIHET;
+    fmt.fmt.pix.height = CAMERA_HEIGHT;
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if(ioctl(dev->fd, VIDIOC_S_FMT, &fmt) < 0) {
         perror("set format failed\n");
@@ -95,7 +55,7 @@ int camera_init(Camera_DevType* dev, const char* file_name)
     }
 
     if((CAMERA_WIDTH == fmt.fmt.pix.width) &&\
-        (CAMERA_HEIHET == fmt.fmt.pix.height)) {
+        (CAMERA_HEIGHT == fmt.fmt.pix.height)) {
         printf("set format successfully\n");
     }else {
         printf("format adjusted to driver, format: %dx%d\n", fmt.fmt.pix.width, fmt.fmt.pix.height);

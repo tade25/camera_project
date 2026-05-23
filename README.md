@@ -30,3 +30,11 @@
 - 修复my_imx6ull_csi_remove中使用csi_dev->dcic/mclk/axi但probe中未初始化的问题
 - 修复ring_buffer_set时buffer满未释放互斥锁的问题
 - 优化camera_capture函数中的超时重试机制修改为do while
+
+## v0.3.3(2026-05-25)
+- 删除应用层camera.c中的枚举格式，帧大小，帧率的逻辑
+- 修复应用层camera.h中的CAMERA_HEIGHT的拼写错误
+- 支持v4l2-ctl工具修改参数
+- 标准化imx6ull_querycap中v4l2_capability返回的driver/card/bus_info
+- csi驱动新增imx6ull_vidioc_queryctrl/imx6ull_vidioc_g_ext_ctrls/imx6ull_vidioc_s_ext_ctrls三个函数，支持查看并调整基础画质参数
+- ov5640驱动新增图像参数调控功能，实现亮度、对比度寄存器配置调节，注册亮度/对比度/色彩饱和度控制接口，适配v4l2控制框架

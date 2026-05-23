@@ -4,6 +4,7 @@
 #include <media/v4l2-ioctl.h>
 #include <media/videobuf2-dma-contig.h>
 #include <media/v4l2-subdev.h>
+#include <media/v4l2-ctrls.h>
 #include <linux/clk.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
@@ -421,8 +422,9 @@ static struct vb2_ops imx6ull_vb2_ops = {
 
 static int imx6ull_querycap(struct file *file, void *fh, struct v4l2_capability *cap)
 {
-    strlcpy(cap->driver, "my_virtual_videio", sizeof(cap->driver));
-    strlcpy(cap->card, "no_card", sizeof(cap->card));
+	strlcpy(cap->driver, "imx6ull_csi", sizeof(cap->driver));
+	strlcpy(cap->card, "imx6ull csi camera", sizeof(cap->card));
+	strlcpy(cap->bus_info, "platform:021c4000.csi", sizeof(cap->bus_info));
 	cap->device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
 	cap->capabilities = cap->device_caps | V4L2_CAP_DEVICE_CAPS;
 
@@ -515,6 +517,42 @@ static int imx6ull_vidioc_querybuf(struct file *file, void *priv, struct v4l2_bu
 	return ret;
 }
 
+static int imx6ull_vidioc_queryctrl(struct file *file, void *fh,
+		struct v4l2_queryctrl *a)
+{
+	struct imx6ull_csi_dev* csi_dev = video_drvdata(file);
+	struct v4l2_subdev * sensor_sd = csi_dev->sensor_sd;
+
+	if(!sensor_sd)
+		return -ENOTTY;
+
+	return v4l2_subdev_queryctrl(sensor_sd, a);
+}
+
+static int imx6ull_vidioc_g_ext_ctrls(struct file *file, void *fh,
+		struct v4l2_ext_controls *a)
+{
+	struct imx6ull_csi_dev* csi_dev = video_drvdata(file);
+	struct v4l2_subdev * sensor_sd = csi_dev->sensor_sd;
+
+	if(!sensor_sd)
+		return -ENOTTY;
+
+	return v4l2_subdev_g_ext_ctrls(sensor_sd, a);
+}
+
+static int imx6ull_vidioc_s_ext_ctrls(struct file *file, void *fh,
+		struct v4l2_ext_controls *a)
+{
+	struct imx6ull_csi_dev* csi_dev = video_drvdata(file);
+	struct v4l2_subdev * sensor_sd = csi_dev->sensor_sd;
+
+	if(!sensor_sd)
+		return -ENOTTY;
+
+	return v4l2_subdev_s_ext_ctrls(sensor_sd, a);
+}
+
 static int imx6ull_vidioc_g_parm(struct file *file, void *fh,
 		struct v4l2_streamparm *a)
 {
@@ -600,7 +638,7 @@ static int imx6ull_enum_frameintervals(struct file *file, void *priv,
 	return 0;
 }
 
-static const struct v4l2_ioctl_ops imx6ull_ioctl_ops = {
+static const struct v4l2_ioctl_ops imx6ull_v4l2_ioctl_ops = {
 	.vidioc_querycap          	= imx6ull_querycap,
 	.vidioc_enum_fmt_vid_cap  	= imx6ull_enum_fmt_vid_cap,
 
@@ -618,6 +656,10 @@ static const struct v4l2_ioctl_ops imx6ull_ioctl_ops = {
 	.vidioc_dqbuf             	= vb2_ioctl_dqbuf,
 	.vidioc_expbuf			  	= vb2_ioctl_expbuf,
 
+	.vidioc_queryctrl			= imx6ull_vidioc_queryctrl,
+	.vidioc_g_ext_ctrls			= imx6ull_vidioc_g_ext_ctrls,
+	.vidioc_s_ext_ctrls			= imx6ull_vidioc_s_ext_ctrls,
+
 	.vidioc_g_parm				= imx6ull_vidioc_g_parm,
 	.vidioc_s_parm				= imx6ull_vidioc_s_parm,
 
@@ -625,7 +667,7 @@ static const struct v4l2_ioctl_ops imx6ull_ioctl_ops = {
 	.vidioc_enum_frameintervals = imx6ull_enum_frameintervals,
 };
 
-static const struct v4l2_file_operations imx6ull_fops = {
+static const struct v4l2_file_operations imx6ull_v4l2_fops = {
 	.owner                    = THIS_MODULE,
 	.open                     = v4l2_fh_open,
 	.release                  = vb2_fop_release,
@@ -686,7 +728,7 @@ static int imx6ull_csi_register_subdev(struct imx6ull_csi_dev* csi_dev)
 	return ret;
 }
 
-int my_imx6ull_csi_probe(struct platform_device  * pdev)
+int imx6ull_csi_probe(struct platform_device  * pdev)
 {
 	struct imx6ull_csi_dev* csi_dev;
 	struct resource* res;
@@ -801,8 +843,8 @@ int my_imx6ull_csi_probe(struct platform_device  * pdev)
 
     /* Register video_device structure */
     csi_dev->vdev->release = video_device_release_empty;
-    csi_dev->vdev->fops = &imx6ull_fops;
-    csi_dev->vdev->ioctl_ops = &imx6ull_ioctl_ops;
+    csi_dev->vdev->fops = &imx6ull_v4l2_fops;
+    csi_dev->vdev->ioctl_ops = &imx6ull_v4l2_ioctl_ops;
     ret = video_register_device(csi_dev->vdev, VFL_TYPE_GRABBER, -1);
     if(ret < 0)
        	goto err_video_device;
@@ -835,7 +877,7 @@ err_prepare_axi:
 	return ret;
 }
 
-int my_imx6ull_csi_remove(struct platform_device *pdev)
+int imx6ull_csi_remove(struct platform_device *pdev)
 {
 	struct imx6ull_csi_dev* csi_dev = platform_get_drvdata(pdev);
 
@@ -855,21 +897,21 @@ int my_imx6ull_csi_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct of_device_id my_imx6ull_csi_of_match[] = {
+static const struct of_device_id imx6ull_csi_of_match[] = {
 	{.compatible = "myboard,imx6ul-csi",},
 	{},
 };
 
-static struct platform_driver myboard_csi_driver = {
-	.probe = my_imx6ull_csi_probe,
-	.remove = my_imx6ull_csi_remove,
+static struct platform_driver imx6ull_csi_driver = {
+	.probe = imx6ull_csi_probe,
+	.remove = imx6ull_csi_remove,
 	.driver = {
 		.name = "csi",
-		.of_match_table = my_imx6ull_csi_of_match,
+		.of_match_table = imx6ull_csi_of_match,
 	},
 };
 
-module_platform_driver(myboard_csi_driver);
+module_platform_driver(imx6ull_csi_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("My CSI Driver");
