@@ -46,10 +46,8 @@ int camera_init(Camera_DevType* dev, const char* file_name)
     }
 
     memset(&fmt, 0, sizeof(fmt));
-    fmt.fmt.pix.width = CAMERA_WIDTH;
-    fmt.fmt.pix.height = CAMERA_HEIGHT;
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    if(ioctl(dev->fd, VIDIOC_S_FMT, &fmt) < 0) {
+    if(ioctl(dev->fd, VIDIOC_G_FMT, &fmt) < 0) {
         perror("set format failed\n");
         goto err_close;
     }

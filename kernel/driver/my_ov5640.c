@@ -293,6 +293,99 @@ static int ov5640_set_contrast(struct ov5640_dev* dev, int contrast)
 	return 0;
 }
 
+static int ov5640_set_saturation(struct ov5640_dev* dev, int saturation)
+{
+	struct reg_value reg_data[14] = {
+		{0x3212, 0x03}, {0x5381, 0x1c},
+		{0x5382, 0x5a}, {0x5383, 0x06},
+		{0x5384, 0x00}, {0x5385, 0x00},
+		{0x5386, 0x00}, {0x5387, 0x00},
+		{0x5388, 0x00}, {0x5389, 0x00},
+		{0x538b, 0x98}, {0x538a, 0x01},
+		{0x3212, 0x13}, {0x3212, 0xa3},
+	};
+	int level;
+	int i;
+
+	if((saturation < 0) || (saturation > 255))	
+		return -EINVAL;
+	
+    if (saturation <= 36)       level = -3;
+    else if (saturation <= 72)  level = -2;
+    else if (saturation <= 108) level = -1;
+    else if (saturation <= 144) level = 0;
+    else if (saturation <= 180) level = +1;
+    else if (saturation <= 216) level = +2;
+    else						level = +3;
+
+    switch (level) {
+        case -3:
+			reg_data[4].reg_val = 0x0c;
+			reg_data[5].reg_val = 0x30;
+			reg_data[6].reg_val = 0x3d;
+			reg_data[7].reg_val = 0x3e;
+			reg_data[8].reg_val = 0x3d;
+			reg_data[9].reg_val = 0x01;
+			break;
+        case -2:
+			reg_data[4].reg_val = 0x10;
+			reg_data[5].reg_val = 0x3d;
+			reg_data[6].reg_val = 0x4d;
+			reg_data[7].reg_val = 0x4e;
+			reg_data[8].reg_val = 0x4d;
+			reg_data[9].reg_val = 0x01;
+			break;
+        case -1:
+			reg_data[4].reg_val = 0x15;
+			reg_data[5].reg_val = 0x52;
+			reg_data[6].reg_val = 0x66;
+			reg_data[7].reg_val = 0x68;
+			reg_data[8].reg_val = 0x66;
+			reg_data[9].reg_val = 0x02;
+			break;
+        case 0:
+			reg_data[4].reg_val = 0x1a;
+			reg_data[5].reg_val = 0x66;
+			reg_data[6].reg_val = 0x80;
+			reg_data[7].reg_val = 0x82;
+			reg_data[8].reg_val = 0x80;
+			reg_data[9].reg_val = 0x02;
+			break;
+        case +1:
+			reg_data[4].reg_val = 0x1f;
+			reg_data[5].reg_val = 0x7a;
+			reg_data[6].reg_val = 0x9a;
+			reg_data[7].reg_val = 0x9c;
+			reg_data[8].reg_val = 0x9a;
+			reg_data[9].reg_val = 0x02;
+			break;
+        case +2:
+			reg_data[4].reg_val = 0x24;
+			reg_data[5].reg_val = 0x8f;
+			reg_data[6].reg_val = 0xb3;
+			reg_data[7].reg_val = 0xb6;
+			reg_data[8].reg_val = 0xb3;
+			reg_data[9].reg_val = 0x03;
+			break;
+        case +3:
+			reg_data[4].reg_val = 0x2b;
+			reg_data[5].reg_val = 0xab;
+			reg_data[6].reg_val = 0xd6;
+			reg_data[7].reg_val = 0xda;
+			reg_data[8].reg_val = 0xd6;
+			reg_data[9].reg_val = 0x04;
+			break;
+		default:
+			break;
+    }
+
+    for(i = 0;i < 14;i++) {
+        (void)i2c_ov5640_write(dev->client, reg_data[i].reg, &reg_data[i].reg_val, 1);
+    }
+
+	return 0;
+}
+
 static void ov5640_global_init(struct ov5640_dev* dev)
 {
     u8 i;
@@ -490,8 +583,7 @@ static int ov5640_s_ctrl(struct v4l2_ctrl *ctrl)
 			return ret;
 		break;
 	case V4L2_CID_SATURATION:
-
-		printk("saturation: %d\n", ctrl->val);
+		ov5640_set_saturation(&ov5640, ctrl->val);
 		break;
 	default:
 		return -EINVAL;
@@ -578,14 +670,14 @@ static int ov5640_probe(struct i2c_client *client, const struct i2c_device_id *i
 	}
 
 	ctrl = v4l2_ctrl_new_std(&ov5640.ctrl_handler, &ov5640_ctrl_ops,\
-			V4L2_CID_CONTRAST, 0, 255, 1, 128);
+			V4L2_CID_CONTRAST, 0, 255, 1, 0);
 	if(!ctrl) {
 		dev_err(&client->dev, "failed to create contrast control\n");
 		return -ENOMEM;
 	}
 
 	ctrl = v4l2_ctrl_new_std(&ov5640.ctrl_handler, &ov5640_ctrl_ops,\
-			V4L2_CID_SATURATION, 0, 255, 1, 128);
+			V4L2_CID_SATURATION, 0, 255, 1, 0);
 	if(!ctrl) {
 		dev_err(&client->dev, "failed to create saturation control\n");
 		return -ENOMEM;
